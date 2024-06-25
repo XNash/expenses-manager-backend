@@ -1,11 +1,5 @@
 [
   {
-    "id": "0",
-    "name": "Nash Tefison",
-    "amount": 0,
-    "userId": "0"
-  },
-  {
     "id": "2",
     "name": "Divertissements",
     "amount": 30000,
@@ -17,7 +11,7 @@
   {
     "id": "3",
     "name": "Etudes",
-    "amount": 30000,
+    "amount": 500000,
     "date": "2024-06-25",
     "category": "Other",
     "description": "",

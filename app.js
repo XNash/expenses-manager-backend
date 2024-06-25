@@ -6,7 +6,8 @@ const cors = require('cors');
 const swaggerJsdoc = require('swagger-jsdoc');
 const swaggerUi = require('swagger-ui-express');
 const nodemailer = require('nodemailer');
-const axios = require('axios')
+const axios = require('axios');
+const crypto = require('crypto');
 
 const app = express();
 const port = 3000;
@@ -80,6 +81,21 @@ const authenticateToken = (req, res, next) => {
         req.user = user;
         next();
     });
+};
+
+const sendEmail = async (to, subject, html) => {
+    try {
+        await transporter.sendMail({
+            from: 'nashtefison@gmail.com',
+            to,
+            subject,
+            html
+        });
+        console.log('Email sent successfully');
+    } catch (error) {
+        console.error('Error sending email:', error);
+        throw error;
+    }
 };
 
 /**
@@ -168,7 +184,7 @@ app.post('/login', checkFiles, (req, res) => {
  *       400:
  *         description: Email déjà utilisé
  */
-app.post('/register', checkFiles, (req, res) => {
+app.post('/register', checkFiles, async (req, res) => {
     const {name, email, password} = req.body;
     const users = readData(userDataPath);
 
@@ -187,7 +203,133 @@ app.post('/register', checkFiles, (req, res) => {
     writeData(userDataPath, users);
 
     const token = jwt.sign({id: newUser.id, email: newUser.email}, SECRET_KEY, {expiresIn: '1h'});
-    res.json({token, user: {id: newUser.id, name: newUser.name, email: newUser.email}});
+
+    try {
+        await sendEmail(
+            email,
+            'Welcome to our Expense Management App!',
+            `<h1>Welcome ${name}!</h1><p>Thank you for registering with our Expense Management App.</p>`
+        );
+        res.json({token, user: {id: newUser.id, name: newUser.name, email: newUser.email}});
+    } catch (error) {
+        res.status(500).json({error: 'Registration successful, but failed to send welcome email'});
+    }
+});
+
+/**
+ * @swagger
+ * /reset-password:
+ *   post:
+ *     summary: Réinitialise le mot de passe d'un utilisateur
+ *     tags: [Auth]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - token
+ *               - newPassword
+ *             properties:
+ *               token:
+ *                 type: string
+ *                 description: Token de réinitialisation reçu par email
+ *               newPassword:
+ *                 type: string
+ *                 description: Nouveau mot de passe
+ *     responses:
+ *       200:
+ *         description: Mot de passe réinitialisé avec succès
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *       400:
+ *         description: Token invalide ou expiré
+ *       404:
+ *         description: Utilisateur non trouvé
+ */
+app.post('/reset-password', async (req, res) => {
+    const { token, newPassword } = req.body;
+
+    try {
+        const decoded = jwt.verify(token, SECRET_KEY);
+        const users = readData(userDataPath);
+        const user = users.find(u => u.id === decoded.id);
+
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        user.password = newPassword;
+        writeData(userDataPath, users);
+
+        res.json({ message: 'Password successfully reset' });
+    } catch (error) {
+        console.error('Error resetting password:', error);
+        res.status(400).json({ error: 'Invalid or expired token' });
+    }
+});
+
+
+/**
+ * @swagger
+ * /forgot-password:
+ *   post:
+ *     summary: Réinitialise le mot de passe et l'envoie par email
+ *     tags: [Auth]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - email
+ *             properties:
+ *               email:
+ *                 type: string
+ *                 description: Email de l'utilisateur
+ *     responses:
+ *       200:
+ *         description: Nouveau mot de passe envoyé par email
+ *       404:
+ *         description: Utilisateur non trouvé
+ *       500:
+ *         description: Erreur lors de l'envoi de l'email
+ */
+app.post('/forgot-password', checkFiles, async (req, res) => {
+    const { email } = req.body;
+    const users = readData(userDataPath);
+    const user = users.find(u => u.email === email);
+
+    if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+    }
+
+    const newPassword = crypto.randomBytes(8).toString('hex');
+
+    user.password = newPassword;
+    writeData(userDataPath, users);
+
+    try {
+        await sendEmail(
+            email,
+            'Your New Password',
+            `<h1>Password Reset</h1>
+             <p>Your password has been reset. Here is your new password:</p>
+             <p><strong>${newPassword}</strong></p>
+             <p>Please change your password after logging in.</p>`
+        );
+        res.json({ message: 'New password has been sent to your email' });
+    } catch (error) {
+        console.error('Error sending new password email:', error);
+        res.status(500).json({ error: 'Failed to send new password email' });
+    }
 });
 
 /**
@@ -358,6 +500,87 @@ app.delete('/expenses/:id', authenticateToken, checkFiles, (req, res) => {
 
 /**
  * @swagger
+ * /send-expense-report:
+ *   post:
+ *     summary: Envoie un rapport de dépenses par email
+ *     tags: [Expenses]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - email
+ *               - startDate
+ *               - endDate
+ *             properties:
+ *               email:
+ *                 type: string
+ *               startDate:
+ *                 type: string
+ *                 format: date
+ *               endDate:
+ *                 type: string
+ *                 format: date
+ *     responses:
+ *       200:
+ *         description: Rapport envoyé avec succès
+ *       401:
+ *         description: Non autorisé
+ *       500:
+ *         description: Erreur serveur
+ */
+app.post('/send-expense-report', authenticateToken, async (req, res) => {
+    const { email, startDate, endDate } = req.body;
+    const userId = req.user.id;
+
+    try {
+        const expenses = readData(expenseDataPath);
+        const userExpenses = expenses.filter(expense =>
+            expense.userId === userId &&
+            new Date(expense.date) >= new Date(startDate) &&
+            new Date(expense.date) <= new Date(endDate)
+        );
+        const total = userExpenses.reduce((sum, expense) => sum + expense.amount, 0);
+        const mailOptions = {
+            from: 'nashtefison@gmail.com',
+            to: email,
+            subject: 'Your Expense Report',
+            html: `
+                <h1>Expense Report</h1>
+                <p>From ${startDate} to ${endDate}</p>
+                <h2>Total Expenses: ${total.toFixed(2)} MGA</h2>
+                <table>
+                  <tr>
+                    <th>Date</th>
+                    <th>Name</th>
+                    <th>Amount</th>
+                  </tr>
+                  ${userExpenses.map(expense => `
+                    <tr>
+                      <td>${expense.date}</td>
+                      <td>${expense.name}</td>
+                      <td>${expense.amount.toFixed(2)} MGA</td>
+                    </tr>
+                  `).join('')}
+                </table>
+            `
+        };
+
+        await transporter.sendMail(mailOptions);
+
+        res.status(200).json({ message: 'Report sent successfully' });
+    } catch (error) {
+        console.error('Error sending report:', error);
+        res.status(500).json({ error: 'Failed to send report' });
+    }
+});
+
+/**
+ * @swagger
  * components:
  *   securitySchemes:
  *     bearerAuth:
@@ -474,10 +697,34 @@ app.get('/test-swagger', (req, res) => {
 
 /**
  * @swagger
- * /send-expense-report:
- *   post:
- *     summary: Envoie un rapport de dépenses par email
- *     tags: [Expenses]
+ * /user-profile:
+ *   get:
+ *     summary: Récupère le profil de l'utilisateur actuel
+ *     tags: [User]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Profil de l'utilisateur
+ *       401:
+ *         description: Non autorisé
+ */
+app.get('/user-profile', authenticateToken, (req, res) => {
+    const users = readData(userDataPath);
+    const user = users.find(u => u.id === req.user.id);
+    if (user) {
+        res.json({ name: user.name, email: user.email });
+    } else {
+        res.status(404).json({ error: 'User not found' });
+    }
+});
+
+/**
+ * @swagger
+ * /user-profile:
+ *   put:
+ *     summary: Met à jour le profil de l'utilisateur actuel
+ *     tags: [User]
  *     security:
  *       - bearerAuth: []
  *     requestBody:
@@ -487,70 +734,50 @@ app.get('/test-swagger', (req, res) => {
  *           schema:
  *             type: object
  *             required:
+ *               - name
  *               - email
- *               - startDate
- *               - endDate
+ *               - currentPassword
  *             properties:
+ *               name:
+ *                 type: string
  *               email:
  *                 type: string
- *               startDate:
+ *               currentPassword:
  *                 type: string
- *                 format: date
- *               endDate:
+ *               newPassword:
  *                 type: string
- *                 format: date
  *     responses:
  *       200:
- *         description: Rapport envoyé avec succès
+ *         description: Profil mis à jour avec succès
+ *       400:
+ *         description: Données invalides
  *       401:
  *         description: Non autorisé
- *       500:
- *         description: Erreur serveur
  */
-app.post('/send-expense-report', authenticateToken, async (req, res) => {
-    const { email, startDate, endDate } = req.body;
-    const userId = req.user.id;
+app.put('/user-profile', authenticateToken, (req, res) => {
+    const { name, email, currentPassword, newPassword } = req.body;
+    const users = readData(userDataPath);
+    const userIndex = users.findIndex(u => u.id === req.user.id);
 
-    try {
-        const expenses = readData(expenseDataPath);
-        const userExpenses = expenses.filter(expense =>
-            expense.userId === userId &&
-            new Date(expense.date) >= new Date(startDate) &&
-            new Date(expense.date) <= new Date(endDate)
-        );
-        const total = userExpenses.reduce((sum, expense) => sum + expense.amount, 0);
-        const mailOptions = {
-            from: 'nashtefison@gmail.com',
-            to: email,
-            subject: 'Your Expense Report',
-            html: `
-                <h1>Expense Report</h1>
-                <p>From ${startDate} to ${endDate}</p>
-                <h2>Total Expenses: $${total.toFixed(2)}</h2>
-                <table>
-                  <tr>
-                    <th>Date</th>
-                    <th>Name</th>
-                    <th>Amount</th>
-                  </tr>
-                  ${userExpenses.map(expense => `
-                    <tr>
-                      <td>${expense.date}</td>
-                      <td>${expense.name}</td>
-                      <td>$${expense.amount.toFixed(2)}</td>
-                    </tr>
-                  `).join('')}
-                </table>
-      `
-        };
-
-        await transporter.sendMail(mailOptions);
-
-        res.status(200).json({ message: 'Report sent successfully' });
-    } catch (error) {
-        console.error('Error sending report:', error);
-        res.status(500).json({ error: 'Failed to send report' });
+    if (userIndex === -1) {
+        return res.status(404).json({ error: 'User not found' });
     }
+
+    const user = users[userIndex];
+
+    if (user.password !== currentPassword) {
+        return res.status(401).json({ error: 'Current password is incorrect' });
+    }
+
+    user.name = name;
+    user.email = email;
+    if (newPassword) {
+        user.password = newPassword;
+    }
+
+    writeData(userDataPath, users);
+
+    res.json({ message: 'Profile updated successfully', user: { id: user.id, name: user.name, email: user.email } });
 });
 
 axios.interceptors.request.use(

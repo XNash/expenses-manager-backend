@@ -3,12 +3,18 @@
     "id": "0",
     "name": "Tefison Nathaniah Jean Baptiste",
     "email": "tefisonnathaniah@gmail.com",
-    "password": "tefisonnathaniah"
+    "password": "Nasshunash"
   },
   {
     "id": "2",
     "name": "Nash Tefison",
     "email": "nashtefison@gmail.com",
     "password": "Nasshunash"
+  },
+  {
+    "id": "3",
+    "name": "Razanabololona Haja",
+    "email": "razanabololonah@iou.adventist.org",
+    "password": "Hajarazanabololona"
   }
 ]
